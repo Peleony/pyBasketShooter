@@ -20,15 +20,19 @@ COLOR_TEXT = (240, 240, 240)
 #Physic constants
 GRAVITY = 0.38
 AIR_RESISTANCE = 0.998
+BOUNCE_RESTITUTION = 0.72
 FLOOR_Y = HEIGHT - 60
 
 
 class BasketballGame:
+
     def __init__(self):
         pygame.init()
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
         pygame.display.set_caption("Basketball Shot Game")
         self.clock = pygame.time.Clock()
+        self.font = pygame.font.SysFont("Consolas", 20, bold=True)
+        self.big_font = pygame.font.SysFont("Consolas", 42, bold=True)
 
         # Basket properties
         self.floor_y = HEIGHT - 60
@@ -82,7 +86,7 @@ class BasketballGame:
                     elif event.type == pygame.MOUSEBUTTONDOWN:
                         if event.button == 1:  # Left mouse button
                             mx, my = pygame.mouse.get_pos()
-                            dist = math.hypox(mx - self.ball_x, my - self.ball_y)
+                            dist = math.hypot(mx - self.ball_x, my - self.ball_y)
                             if dist <= self.ball_radius * 2.5:
                                 self.is_dragging = True
                                 self.drag_start = (mx, my)
@@ -109,7 +113,86 @@ class BasketballGame:
 
 
     def update_physics(self):
-         ,
+        if not self.is_in_air:
+            return
+
+        #Gravity and air resistance
+        self.ball_vy += GRAVITY
+        self.ball_vx *= AIR_RESISTANCE
+        self.ball_vy *= AIR_RESISTANCE
+
+        self.ball_x += self.ball_vx
+        self.ball_y += self.ball_vy
+        self.ball_angel += self.ball_vx * 2.0
+
+        # Floor collision
+        if self.ball_y + self.ball_radius >= self.floor_y:
+            self.ball_y = self.floor_y - self.ball_radius
+            self.ball_vy *= -self.ball_vy * BOUNCE_RESTITUTION
+            self.ball_vx *= 0.85
+            if abs(self.ball_vy) < 1.0:
+                self.ball_vy = 0
+
+        #Board collision
+        if (
+            self.board_y <= self.ball_y <= self.board_y + self.board_h
+            and self.ball_x + self.ball_radius >= self.board_x
+            and self.ball_x - self.ball_radius <= self.board_x + self.board_w
+        ):
+            self.ball_x = self.board_x - self.ball_radius
+            self.ball_vx = -self.ball_vx * BOUNCE_RESTITUTION
+
+        # Rim collision
+        rim_points = [
+            (self.rim_left, self.rim_y),
+            (self.rim_right, self.rim_y),
+        ]
+        for px, py in rim_points:
+            dist = math.hypot(self.ball_x - px, self.ball_radius - py)
+            if dist < self.ball_radius + self.rim_thickness:
+
+                overlap = (self.ball_radius + self.rim_thickness) - dist
+                nx = (self.ball_x - px) / (dist or 1)
+                ny = (self.ball_y - py) / (dist or 1)
+
+                self.ball_x += nx * overlap
+                self.ball_y += ny * overlap
+                dot = self.ball_vx * nx + self.ball_vy * ny
+                self.ball_vx = (
+                    self.ball_vx -2 * dot * nx
+                ) * BOUNCE_RESTITUTION
+                self.ball_vy = (
+                    self.ball_vy -2 * dot * ny
+                ) * BOUNCE_RESTITUTION
+
+        #Shot in detection
+        hoop_min_x = self.rim_left + 6
+        hoop_max_x = self.rim_right - 6
+        if (
+            hoop_min_x <= self.ball_x <= hoop_max_x
+            and abs(self.ball_y - self.rim_y) <= 10
+            and self.ball_vy > 1.2
+            and not self.scored_this_shot
+        ):
+            self.score += 1
+            self.streak += 1
+            self.scored_this_shot = True
+            self.feedback_text = (
+                f"SWISH! (+1)  STREAK: {self.streak}"
+                if abs(self.ball_vx) < 3
+                else f"BUCKET! (+1)  STREAK: {self.streak}"
+            )
+            self.feedback_timer = FPS * 2
+
+        # Reset ball if out or stopped
+        if (
+            self.ball_x > WIDTH + 50
+            or self.ball_x < -50
+            or (self.ball_y >= self.floor_y - self.ball_radius - 1 and abs(self.ball_vx) < 0.2 and abs(self.ball_vy) < 0.2)
+        ):
+            if not self.scored_this_shot and self.is_in_air:
+                self.streak = 0
+            self.reset_ball()
 
     def draw_hoop(self):
          #Pole
@@ -121,7 +204,7 @@ class BasketballGame:
         #Backboard
         pygame.draw.rect(
             self.screen,
-            (80, 80, 85)        ,
+            (80, 80, 85),
             (self.board_x, self.board_y, self.board_w, self.board_h),
             border_radius=3
         )
@@ -191,7 +274,46 @@ class BasketballGame:
 
         
     def draw_ui(self):
-        ,
+        
+        # Draw floor
+        pygame.draw.rect(
+            self.screen,
+            COLOR_FLOOR,
+            (0, self.floor_y, WIDTH, HEIGHT - self.floor_y),
+        )
+        pygame.draw.line(
+            self.screen, (150, 100, 50), (0, self.floor_y), (WIDTH, self.floor_y), 3
+        )
+
+        # Draw free throw line
+        pygame.draw.line(
+            self.screen,
+            (255, 255, 255),
+            (self.spawn_pos[0], self.floor_y),
+            (self.spawn_pos[0], self.floor_y + 12),
+            3,
+        )
+
+        # Score board
+        score_surf = self.font.render(
+            f"SCORE: {self.score}   STREAK: {self.streak}", True, COLOR_TEXT
+        )
+        help_surf = self.font.render(
+            "Sterowanie: Przeciagnij myszka od pilki i pusc | R = Reset",
+            True,
+            (160, 160, 170),
+        )
+        self.screen.blit(score_surf, (25, 25))
+        self.screen.blit(help_surf, (25, 55))
+
+        # Feedback message
+        if self.feedback_timer > 0:
+            msg_surf = self.big_font.render(
+                self.feedback_text, True, (80, 255, 120)
+            )
+            rect = msg_surf.get_rect(center=(WIDTH // 2, 120))
+            self.screen.blit(msg_surf, rect)
+            self.feedback_timer -= 1
 
     def run(self):
         while True:
